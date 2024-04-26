@@ -315,7 +315,7 @@ fn our_blsms(rng: &mut [RAND], ell: usize, benchmark: bool) -> (u128, u128, u128
 
     //pk aggregation    
     time = Instant::now();
-    let (k1, k2) = our_aggpk(&pk, &order, &hash_2big(&mut HASH256::new(), &sig[0], ell, &order));        
+    let (k1, k2) = our_aggpk(&pk);        
     let time_apk = time.elapsed().as_nanos();
 
     if !benchmark{
@@ -335,11 +335,15 @@ fn our_blsms(rng: &mut [RAND], ell: usize, benchmark: bool) -> (u128, u128, u128
     let mut r = pair::initmp();
     pair::another(&mut r, &ECP2::generator(), &s1);
 
-    //e(S2, K1)
-    pair::another(&mut r, &k1, &ECP::frombytes(&sig[0]));
+    //e(S2 + H(m)^{H(S_2)}, K1)
+    //pair::another(&mut r, &k1, &ECP::frombytes(&sig[0]));
+    let hash_m = &bls_hash_to_point(&m.as_bytes());
+    let mut temp = ECP::frombytes(&sig[0]);
+    temp.add(&hash_m.mul(&hash_2big(&mut HASH256::new(), &sig[0], ell, &order)));
+    pair::another(&mut r, &k1, &temp);
 
     //e(H(m), K2)
-    pair::another(&mut r, &k2, &bls_hash_to_point(&m.as_bytes()));
+    pair::another(&mut r, &k2, &hash_m);
 
     let mut v = pair::miller(&mut r);
     v = pair::fexp(&v);
@@ -389,13 +393,13 @@ fn our_combiner(sig: &Vec<[u8; G1S]>, sk: &BIG, order: &BIG, start: &BIG) -> ECP
     sigma
 }
 
-fn our_aggpk(pkvec: &Vec<[u8; G2S]>, order: &BIG, start: &BIG) -> (ECP2, ECP2) {
+fn our_aggpk(pkvec: &Vec<[u8; G2S]>) -> (ECP2, ECP2) {//, order: &BIG, start: &BIG) -> (ECP2, ECP2) {
     //concatenate all pk bytes
     let mut k1 = ECP2::new();
     let mut k2 = ECP2::new();
 
     
-    if start.iszilch(){
+    //if start.iszilch(){
         for i in 0..pkvec.len(){                    
             k2.add(
                 //&pair::g2mul(&ECP2::frombytes(&pkvec[i]), &BIG::new_int((i as isize) +1))            
@@ -417,17 +421,17 @@ fn our_aggpk(pkvec: &Vec<[u8; G2S]>, order: &BIG, start: &BIG) -> (ECP2, ECP2) {
             tt = time0.elapsed().as_nanos();
             println!("Time taken by g2mul in ours: {}ns", fmt_time(&tt));*/
         }    
-    }else{
-        for i in 0..pkvec.len(){        
-            k1.add(
-                &ECP2::frombytes(&pkvec[i])
-            );
-            k2.add(
-                //&pair::g2mul(&ECP2::frombytes(&pkvec[i]), &BIG::modadd(&start, &BIG::new_int((i as isize) +1), &order))
-                &ECP2::frombytes(&pkvec[i]).mul(&BIG::modadd(&start, &BIG::new_int((i as isize) +1), &order))            
-            );
-        }
-    }
+    //}else{
+    //    for i in 0..pkvec.len(){        
+    //        k1.add(
+    //            &ECP2::frombytes(&pkvec[i])
+    //        );
+    //        k2.add(
+    //            //&pair::g2mul(&ECP2::frombytes(&pkvec[i]), &BIG::modadd(&start, &BIG::new_int((i as isize) +1), &order))
+    //            &ECP2::frombytes(&pkvec[i]).mul(&BIG::modadd(&start, &BIG::new_int((i as isize) +1), &order))            
+    //        );
+    //    }
+    //}
     
 
     k2.add(&ECP2::frombytes(&pkvec[0]));
