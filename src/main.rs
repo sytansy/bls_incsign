@@ -110,6 +110,137 @@ fn bls(rng: &mut RAND) {
 }
  */
 
+ fn blsms_nopop(rng: &mut [RAND], benchmark: bool) -> (u128, u128, u128, u128, u128){    
+    let l = rng.len();
+    let mut sk: Vec<[u8; BGS]> = vec![[0; BGS]; l];
+    let mut pk: Vec<[u8; G2S]> = vec![[0; G2S]; l];
+    let mut sig: Vec<[u8; G1S]> = vec![[0; G1S]; l];
+
+    let mut res: isize = 0;
+    let mut time;
+    let mut time_setup: u128 = 0;
+
+    //setup
+    for i in 0..l{
+        //sk
+        sk[i] = [0; BGS];
+
+        //pk
+        pk[i] = [0; G2S];
+
+        time = Instant::now();
+        res += bls_setup(&mut rng[i], &mut sk[i], &mut pk[i]);
+        time_setup += time.elapsed().as_nanos();
+    }
+
+    /* check complexity difference
+    time = Instant::now();
+    pair::g1mul(&ECP::generator(), &BIG::frombytes(&sk[0]));
+    let mut ttime = time.elapsed().as_nanos();
+    println!("G1 mult. takes: {}ns", fmt_time(&ttime));
+
+    time = Instant::now();
+    pair::g2mul(&ECP2::generator(), &BIG::frombytes(&sk[0]));
+    ttime = time.elapsed().as_nanos();
+    println!("G2 mult. takes: {}ns", fmt_time(&ttime));
+    */
+
+    if !benchmark{
+        if res == 0 {
+            println!("{} BLS Setup OK, completed in {}ns", l, fmt_time(&time_setup));
+        }else{
+            println!("{} BLS Setup FAILED, completed in {}ns", l, fmt_time(&time_setup));
+        } 
+    }
+
+    //sign
+    let m: &str = "test message";
+    let mut sigma = ECP::new();
+    
+    let mut exp = vec![BIG::new(); l];
+    let mut h1 = HASH256::new();
+
+    let order = BIG::new_ints(&rom::CURVE_ORDER);
+    
+    time = Instant::now();
+    for i in 0..l {
+        bls::core_sign(&mut sig[i], &m.as_bytes(), &sk[i]);
+    }
+    let time_sign = time.elapsed().as_nanos();
+
+    if !benchmark{
+        println!("All {} signers signed in: {}ns\n", l, fmt_time(&time_sign));
+    }
+
+    time = Instant::now();    
+    for i in 0..sig.len(){
+        sigma.add(&ECP::frombytes(&sig[i]));        
+    }
+    let time_comb = time.elapsed().as_nanos();
+    
+    if !benchmark{
+        print!("\nSignature : 0x");
+        printbinary(&ecptobytes(&sigma));
+        println!("Combining time taken: {}ns\n", fmt_time(&time_comb));
+    }
+
+    //pk aggregation
+    time = Instant::now();
+    let apk = aggpk_nopop(&mut h1, &pk, &order);    
+    let time_apk = time.elapsed().as_nanos();
+
+    if !benchmark{
+        print!("APK : 0x");
+        printbinary(&ecp2tobytes(&apk));
+        println!("AggPK time taken: {}ns\n", fmt_time(&time_apk));
+    }
+
+    //verify    
+    time = Instant::now();
+    let mut r = pair::initmp();
+    sigma.neg();
+    pair::another(&mut r, &ECP2::generator(), &sigma);
+    pair::another(&mut r, &apk, &bls_hash_to_point(&m.as_bytes()));
+
+    let mut v = pair::miller(&mut r);
+    v = pair::fexp(&v);
+    if v.isunity() {
+        res = 0;
+    } else{
+        res = -1;
+    }
+    //res = bls::core_verify(&ecptobytes(&sigma), &m.as_bytes(), &ecp2tobytes(&apk));
+    let time_vrf = time.elapsed().as_nanos();
+
+    if !benchmark{
+        if res == 0 {
+            println!("Signature verified.");
+            println!("Verify time taken: {}ns\n", fmt_time(&time_vrf));
+        } else {
+            println!("Signature NOT verified.");
+            println!("Verify time taken: {}ns\n", fmt_time(&time_vrf));
+        }
+    }
+
+    return (time_setup, time_sign, time_comb, time_apk, time_vrf);
+}
+
+fn aggpk_nopop(h1: &mut HASH256, pkvec: &Vec<[u8; G2S]>, order : &BIG) -> ECP2 {
+    //concatenate all pk bytes
+
+    let mut apk = ECP2::new();
+
+    
+    for i in 0..pkvec.len(){    
+        apk.add(&ECP2::frombytes(&pkvec[i]));        
+    }
+    
+    apk
+}
+
+
+
+
 fn bdn_blsms(rng: &mut [RAND], benchmark: bool) -> (u128, u128, u128, u128, u128){    
     let l = rng.len();
     let mut sk: Vec<[u8; BGS]> = vec![[0; BGS]; l];
@@ -132,6 +263,18 @@ fn bdn_blsms(rng: &mut [RAND], benchmark: bool) -> (u128, u128, u128, u128, u128
         res += bls_setup(&mut rng[i], &mut sk[i], &mut pk[i]);
         time_setup += time.elapsed().as_nanos();
     }
+
+    /* check complexity difference
+    time = Instant::now();
+    pair::g1mul(&ECP::generator(), &BIG::frombytes(&sk[0]));
+    let mut ttime = time.elapsed().as_nanos();
+    println!("G1 mult. takes: {}ns", fmt_time(&ttime));
+
+    time = Instant::now();
+    pair::g2mul(&ECP2::generator(), &BIG::frombytes(&sk[0]));
+    ttime = time.elapsed().as_nanos();
+    println!("G2 mult. takes: {}ns", fmt_time(&ttime));
+    */
 
     if !benchmark{
         if res == 0 {
@@ -525,6 +668,7 @@ fn main() {
     let mut benchmark = false;
     let mut bdn_only = false;
     let mut our_only = false;
+    let mut nopop_only = false;
     let mut round: u128 = 1;
     let mut input = String::new();
     let mut ell : usize = 0;
@@ -540,7 +684,7 @@ fn main() {
             benchmark = true;
 
             input.clear();
-            print!("Run which scheme? Type '1' for BDN-MS only, '2' for OUR-MS only, press ENTER for both: ");
+            print!("Run which scheme? Type '1' for BDN-MS only, '2' for OUR-MS only, '3' for BLS-MS-noPoP press ENTER for all: ");
             io::stdout().flush().unwrap(); 
 
             io::stdin().read_line(&mut input).unwrap();
@@ -559,8 +703,9 @@ fn main() {
 
                     ell = input.trim().parse().unwrap();
                 }
+                "3" => { nopop_only = true;}
                 _ => {
-                    bdn_only = true; our_only = true;
+                    bdn_only = true; our_only = true; nopop_only = true;
 
                     print!("What's the bit length of 'ell' for OUR-MS? Insert a number in multiple of 8 (0 - 64): ");
                     io::stdout().flush().unwrap(); 
@@ -580,7 +725,7 @@ fn main() {
             round = input.trim().parse().unwrap();            
         }
         _ => {            
-            bdn_only = true; our_only = true;
+            bdn_only = true; our_only = true; nopop_only = true;
             println!("Run single execution... ");
 
             print!("What's the bit length of 'ell' for OUR-MS? Insert a number in multiple of 8 (0 - 64): ");
@@ -697,6 +842,52 @@ fn main() {
             println!("Verify time taken : {}ns", fmt_time(&verify));
         }else{
             our_blsms(&mut rng, ell, benchmark);
+        }    
+    }
+
+    if nopop_only{
+        println!("\n=================================");
+        println!("\nThis is BLS MS without PoP with {} signers", input_num);
+        println!("=================================\n");
+        io::stdout().flush().unwrap();
+
+        if benchmark{
+            let mut setup : u128 = 0;
+            let mut sign : u128 = 0;
+            let mut combine : u128 = 0;
+            let mut pkagg : u128 = 0;
+            let mut verify : u128 = 0;
+
+            for i in 0..round{
+                print!("\rRunning round {}/{}", i, round);
+                io::stdout().flush().unwrap();
+
+                let (setup_, sign_, combine_, pkagg_, verify_) = blsms_nopop(&mut rng, benchmark);
+                setup += setup_;
+                sign += sign_;
+                combine += combine_;
+                pkagg += pkagg_;
+                verify += verify_;
+            }
+
+            print!("\r{}{}", " ".repeat(30), "\r");
+            io::stdout().flush().unwrap();
+
+
+            setup /= round;
+            sign /= round;
+            combine /= round;
+            pkagg /= round;
+            verify /= round;
+            
+            println!("Average timing for {} rounds:\n", round);
+            println!("Setup time taken  : {}ns", fmt_time(&setup));
+            println!("Signing time taken: {}ns", fmt_time(&sign));
+            println!("Combine time taken: {}ns", fmt_time(&combine));
+            println!("PK Agg time taken : {}ns", fmt_time(&pkagg));
+            println!("Verify time taken : {}ns", fmt_time(&verify));
+        }else{
+            blsms_nopop(&mut rng, benchmark);
         }    
     }
 
